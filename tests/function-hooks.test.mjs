@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { build } from 'esbuild';
-import { patchBuiltinHooksModuleShipping, patchHooksWorker, patchImportMetaDir, patchSplitEsm } from '../scripts/esm-split-patch.mjs';
+import { patchBuiltinHooksModuleShipping, patchHooksWorker, patchImportMetaDir, patchPluginTestVm, patchSplitEsm } from '../scripts/esm-split-patch.mjs';
 
 const host = `
 const urlOf = () => ({ HOOKS_WORKER_URL: '/tmp/hooks-worker.js' }).HOOKS_WORKER_URL;
@@ -70,6 +71,23 @@ function other(url) { return new Worker(url); }`;
   const patched = patchHooksWorker(source);
   assert.equal(patched.patched, 1);
   assert.equal(patched.code, source.replace('new Worker(url, {})', 'new globalThis.__ccHooksWorker(url, {})'));
+});
+
+test('plugin test children enable VM modules after filtering the parent environment', async () => {
+  const source = `export function run(spawn, cmd, prefixArgs) {
+    return spawn(cmd, [...prefixArgs, 'plugin', 'test', '--file', 'probe.ts', '/probe'], {
+      env: { ...{ PROBE: 'kept' } }, encoding: 'utf8', extendEnv: false
+    });
+  }`;
+  const patched = patchPluginTestVm(source);
+  assert.equal(patched.patched, 1);
+  assert.equal(patchPluginTestVm(patched.code).patched, 0);
+  assert.equal(patchPluginTestVm(source.replace("'test'", "'eval'")).code, source.replace("'test'", "'eval'"));
+  const { run } = await import('data:text/javascript,' + encodeURIComponent(patched.code));
+  const child = run(spawnSync, process.execPath, ['--input-type=module', '-e',
+    "import { SourceTextModule } from 'node:vm'; console.log(typeof SourceTextModule, process.env.PROBE)", '--']);
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout.trim(), 'function kept');
 });
 
 test('built-in hooks receive a real module path and shipped content on Node', async () => {
