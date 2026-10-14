@@ -298,9 +298,34 @@ export function patchHooksWorker(code) {
   return { code, patched: matches.length };
 }
 
+// E7: plugin test filters NODE_OPTIONS before starting each test file on Node.
+export function patchPluginTestVm(code) {
+  if (!/['"]plugin['"]\s*,\s*['"]test['"]\s*,\s*['"]--file['"]/.test(code)) return { code, patched: 0 };
+  const ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module' });
+  const inserts = [];
+  (function visit(node) {
+    if (node.type === 'CallExpression' && node.arguments[1]?.type === 'ArrayExpression') {
+      const args = node.arguments[1].elements;
+      const isTest = args.some((arg, i) => arg?.value === 'plugin' && args[i + 1]?.value === 'test' && args[i + 2]?.value === '--file');
+      const options = node.arguments[2];
+      const env = options?.type === 'ObjectExpression' && options.properties.find(p => (p.key?.name ?? p.key?.value) === 'env')?.value;
+      if (isTest && env?.type === 'ObjectExpression' && !env.properties.some(p => (p.key?.name ?? p.key?.value) === 'NODE_OPTIONS')) {
+        inserts.push({ at: env.end - 1, text: `${env.properties.length ? ',' : ''}NODE_OPTIONS:"--experimental-vm-modules --disable-warning=ExperimentalWarning"` });
+      }
+    }
+    for (const child of Object.values(node)) {
+      if (Array.isArray(child)) {
+        for (const item of child) if (item?.type) visit(item);
+      } else if (child?.type) visit(child);
+    }
+  })(ast);
+  for (const { at, text } of inserts.reverse()) code = code.slice(0, at) + text + code.slice(at);
+  return { code, patched: inserts.length };
+}
+
 export async function patchSplitEsm({ extractDir, entryPath }) {
   const files = await listJsFiles(extractDir);
-  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, ast: {} };
+  const stats = { files: files.length, specifiers: 0, literals: 0, metaRequire: 0, metaDir: 0, builtinHooks: 0, hoisted: 0, hooksWorkers: 0, pluginTests: 0, ast: {} };
 
   for (const file of files) {
     let code = await readFile(file, 'utf8');
@@ -322,6 +347,10 @@ export async function patchSplitEsm({ extractDir, entryPath }) {
     const hooksWorker = patchHooksWorker(code);
     code = hooksWorker.code;
     stats.hooksWorkers += hooksWorker.patched;
+
+    const pluginTest = patchPluginTestVm(code);
+    code = pluginTest.code;
+    stats.pluginTests += pluginTest.patched;
 
     const hoist = hoistTopLevelChunkRequires(code, prefixFor(file, extractDir));
     code = hoist.code;
