@@ -269,6 +269,20 @@ if (typeof globalThis.Bun === "undefined") {
     }
   }
 
+  // Bun.serve and Bun.listen are bound by the time they return, and callers
+  // read .port at once (the plugin tool MCP server passes port 0, then builds
+  // its URL from .port). Node's listen(port, host) looks the host up first, so
+  // address() stays null until a later tick; an IP literal needs no lookup, so
+  // bind it right away the way listen(port) without a host already does.
+  function listenNow(server, port, host) {
+    const family = net.isIP(host);
+    if (family && typeof server._listen2 === "function") {
+      server._listen2(host, port, family, 511, undefined, 0);
+    } else {
+      server.listen(port, host);
+    }
+  }
+
   // ──────────────────────────────────────────────
   // Bun.listen — TCP server with Bun-like socket handlers
   // ──────────────────────────────────────────────
@@ -324,7 +338,7 @@ if (typeof globalThis.Bun === "undefined") {
     const port = opts.port ?? 0;
     // Track bound address; Bun.listen returns a usable port synchronously.
     let bound = { address: host, port };
-    server.listen(port, host);
+    listenNow(server, port, host);
     try {
       const addr = server.address();
       if (addr && typeof addr === "object") bound = addr;
@@ -443,7 +457,7 @@ if (typeof globalThis.Bun === "undefined") {
     } else {
       server = http.createServer(handler);
     }
-    server.listen(port, host);
+    listenNow(server, port, host);
 
     return {
       get port() {
