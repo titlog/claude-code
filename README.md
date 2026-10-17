@@ -54,6 +54,7 @@ Split builds are patched directory-wide by `scripts/esm-split-patch.mjs`:
 | E3 | `import.meta.require` (Bun-only) → a `createRequire` wrapper that returns file *content* for `.md`/`.txt` paths, matching Bun's text loader — since 2.1.246 chunks `require()` embedded prompt files and would otherwise crash at startup compiling markdown as JS |
 | E4 | The P6 polyfill ships as `bun-polyfill.mjs`, imported first by `cli.js` and by the hooks worker so `globalThis.Bun` exists before any chunk body runs |
 | E5 | Since 2.1.250 chunks `import.meta.require()` **sibling chunks**, often at top level and inside import cycles, which Bun tolerates by re-entering evaluation but Node's `require(esm)` rejects (`ERR_REQUIRE_CYCLE_MODULE`). Three-layer emulation: top-level chunk requires get a hoisted bare `import` so the target is usually already evaluated (a plain cache hit); a require that still lands mid-cycle returns a lazy namespace proxy that re-requires on first access; a property grabbed off that proxy while the cycle is *still* evaluating (`var X=require(chunk).Prop`) returns a callable lazy value proxy, cached per `(module, prop)` so every grabber sees the identical object and `===` still holds |
+| E7 | `claude plugin test` children receive Node's VM Modules flags after environment filtering, so the testing kit can load `SourceTextModule` without a global `NODE_OPTIONS` setting |
 
 The patches below still apply to split builds. Only the few chunks carrying their marker strings are AST-walked — parsing all 1385 modules would cost minutes per platform.
 
