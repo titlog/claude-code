@@ -10,7 +10,11 @@ on:
   # Touching .release-trigger starts a run. This is how the daily cloud routine
   # kicks off a build: its GitHub integration can write files but cannot call
   # the workflow_dispatch API (403 "not accessible by integration").
+  # A commit that adds `version: X` (and optionally `force: true`) lines to the
+  # file does what the matching workflow_dispatch inputs do, once: only lines
+  # that commit adds count, so later touches go back to auto-detect.
   push:
+    branches: [main]
     paths:
       - '.release-trigger'
   workflow_dispatch:
@@ -33,8 +37,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.detect.outputs.versions }}
+      force: ${{ steps.detect.outputs.force }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
       - uses: actions/setup-node@v6
         with:
           node-version: 'latest'
@@ -45,9 +52,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -n "${{ inputs.version }}" ]; then
-            echo "versions=[\"${{ inputs.version }}\"]" >> "$GITHUB_OUTPUT"
-            echo "Manual: ${{ inputs.version }}"
+          VERSION="${{ inputs.version }}"
+          FORCE="${{ inputs.force }}"
+          if [ "${{ github.event_name }}" = "push" ] && git rev-parse -q --verify HEAD~1 >/dev/null; then
+            ADDED=$(git diff HEAD~1 HEAD -- .release-trigger | sed -n 's/^+//p')
+            VERSION=$(printf '%s\n' "$ADDED" | sed -n 's/^version:[[:space:]]*//p' | tr -d '[:space:]')
+            FORCE=$(printf '%s\n' "$ADDED" | sed -n 's/^force:[[:space:]]*//p' | tr -d '[:space:]')
+          fi
+          if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid version: $VERSION" >&2
+            exit 1
+          fi
+          [ "$FORCE" = "true" ] || FORCE=false
+          echo "force=$FORCE" >> "$GITHUB_OUTPUT"
+          if [ -n "$VERSION" ]; then
+            echo "versions=[\"$VERSION\"]" >> "$GITHUB_OUTPUT"
+            echo "Manual: $VERSION (force=$FORCE)"
           else
             EXISTING=$(gh release list --limit 200 --json tagName \
               --jq '[.[].tagName | ltrimstr("v")]' 2>/dev/null || echo '[]')
@@ -180,7 +200,7 @@ jobs:
           VERSION="${{ matrix.version }}"
 
           if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
-            if [ "${{ inputs.force }}" = "true" ]; then
+            if [ "${{ needs.check.outputs.force }}" = "true" ]; then
               gh release delete "v${VERSION}" --repo "$GITHUB_REPOSITORY" --yes
             else
               echo "Release v${VERSION} already exists, skipping"
