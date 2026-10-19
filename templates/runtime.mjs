@@ -214,6 +214,9 @@ export async function install() {
 }
 
 export async function launch() {
+  if (Number(process.versions.node.split('.')[0]) < 24) {
+    throw new Error(`Claude Code requires Node.js 24 or newer (running ${process.version}). Upgrade Node.js before launching anthropic-cc.`);
+  }
   const root = versionsRoot();
   const { version, runtimeBuild } = readJson(join(packageDir, 'package.json'));
   const tree = await locked(root, () => {
@@ -225,4 +228,3 @@ export async function launch() {
   process.argv[1] = join(tree, 'cli.js');
   await import(pathToFileURL(process.argv[1]).href);
 }
-
