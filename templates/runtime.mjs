@@ -96,7 +96,10 @@ function copyDependency(name, from, nodeModules, ancestors = new Map()) {
   }
   for (const dep of Object.keys(pkg.optionalDependencies || {})) {
     try { dependencyDir(dep, src); } catch { continue; }
-    copyDependency(dep, src, join(dest, 'node_modules'), chain);
+    // sharp's native RPATH loads libvips from a sibling @img package.
+    const target = name.startsWith('@img/sharp-') && dep.startsWith('@img/sharp-libvips-')
+      ? nodeModules : join(dest, 'node_modules');
+    copyDependency(dep, src, target, chain);
   }
   if (name === 'node-pty' && process.platform !== 'win32') {
     const prebuilds = join(dest, 'prebuilds');
